@@ -1,0 +1,23 @@
+# Build artifacts
+/target
+node_modules
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tauri build
+/src-tauri/target
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
