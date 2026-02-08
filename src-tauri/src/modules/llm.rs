@@ -35,6 +35,15 @@ pub struct ContextInfo {
     pub system_prompt: String,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub enum Command {
+    Delete,
+    Bold,
+    Italic,
+    SelectAll,
+    Enter,
+}
+
 pub struct ContextEngine;
 
 impl ContextEngine {
@@ -103,9 +112,9 @@ impl ContextEngine {
         }
     }
 
-    pub async fn refine_text(transcript: &SensitiveTranscript) -> Result<String> {
+    pub async fn refine_text(transcript: &SensitiveTranscript) -> Result<(String, Option<Command>)> {
         if let Err(_) = Self::validate_endpoint() {
-            return Ok(transcript.as_str().to_string());
+            return Ok((transcript.as_str().to_string(), None));
         }
 
         let context = Self::get_context();
@@ -118,7 +127,7 @@ impl ContextEngine {
             .json(&OllamaRequest {
                 model: MODEL.to_string(),
                 prompt: transcript.as_str().to_string(),
-                system: context.system_prompt,
+                system: format!("{} If the user says 'delete that', 'bold that', 'italicize that', 'select all', or 'press enter', return ONLY the keyword: [DELETE], [BOLD], [ITALIC], [SELECT_ALL], or [ENTER]. Otherwise, just return the corrected text.", context.system_prompt),
                 stream: false,
             })
             .send()
@@ -127,7 +136,13 @@ impl ContextEngine {
         match res {
             Ok(response) => {
                 if let Ok(data) = response.json::<OllamaResponse>().await {
-                    return Ok(data.response.trim().to_string());
+                    let text = data.response.trim();
+                    if text == "[DELETE]" { return Ok(("".to_string(), Some(Command::Delete))); }
+                    if text == "[BOLD]" { return Ok(("".to_string(), Some(Command::Bold))); }
+                    if text == "[ITALIC]" { return Ok(("".to_string(), Some(Command::Italic))); }
+                    if text == "[SELECT_ALL]" { return Ok(("".to_string(), Some(Command::SelectAll))); }
+                    if text == "[ENTER]" { return Ok(("".to_string(), Some(Command::Enter))); }
+                    return Ok((text.to_string(), None));
                 }
             }
             Err(_) => {
@@ -135,6 +150,6 @@ impl ContextEngine {
             }
         }
 
-        Ok(transcript.as_str().to_string())
+        Ok((transcript.as_str().to_string(), None))
     }
 }

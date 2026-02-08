@@ -34,6 +34,19 @@ fn ui_ready() {
 
 #[tokio::main]
 async fn main() {
+    // SECURITY: Global Panic Hook to capture exact abort reasons
+    std::panic::set_hook(Box::new(|info| {
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            &s[..]
+        } else {
+            "Unknown panic"
+        };
+        let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "unknown location".to_string());
+        println!("[CRITICAL PANIC] {} at {}", msg, location);
+    }));
+
     let is_recording = Arc::new(Mutex::new(false));
     let tx_audio = Arc::new(Mutex::new(None));
     let amplitude = Arc::new(Mutex::new(0.0));
@@ -88,6 +101,9 @@ async fn main() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_log::Builder::new()
+            .level(log::LevelFilter::Debug)
+            .build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
@@ -134,7 +150,7 @@ async fn main() {
             let code_val = *hotkey_code.lock();
 
             // --- CORE AUDIO REFACTOR: ALWAYS-ON STREAM ---
-            let (tx, rx) = mpsc::channel(100);
+            let (tx, mut rx) = mpsc::channel(100);
             *tx_audio.lock() = Some(tx.clone());
 
             let is_rec_clone = is_recording.clone();
@@ -164,14 +180,6 @@ async fn main() {
                         // Or maybe only when recording? Let's keep it always for now for "Dynamic Island" feel.
                         let _ = app_handle.emit("amplitude", amp);
 
-                        // Debug log every 240 frames (~4 sec) to reduce spam
-                        debug_counter += 1;
-                        if debug_counter % 240 == 0 {
-                            if amp > 0.001 {
-                                println!("[DEBUG] Audio Signal Detect: {:.4}", amp);
-                            }
-                        }
-
                         std::thread::sleep(std::time::Duration::from_millis(15));
                     }
                 } else {
@@ -198,14 +206,14 @@ async fn main() {
                         transcript if !transcript.as_str().trim().is_empty() => {
                             let _ = app_handle_2.emit("status", "Processing");
                             match ContextEngine::refine_text(&transcript).await {
-                                Ok(res) => res,
+                                Ok((r, c)) => (r, c),
                                 Err(_) => (transcript.as_str().to_string(), None),
                             }
                         }
                         _ => continue,
                     };
 
-                    println!("[DEBUG] Final Refined: \"{}\"", refined);
+                    println!("[DEBUG] Final Refined: \"{}\"", &refined);
                     let _ = app_handle_2.emit("transcript", &refined);
 
                     if let Some(cmd) = command {
@@ -247,8 +255,14 @@ async fn main() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
+            let tray_icon = app.default_window_icon().cloned()
+                .unwrap_or_else(|| {
+                    println!("[WARNING] Default window icon not found, using empty icon.");
+                    tauri::image::Image::new(&[], 0, 0)
+                });
+
+            let tray_builder = TrayIconBuilder::new()
+                .icon(tray_icon)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
@@ -275,16 +289,27 @@ async fn main() {
                             let _ = window.set_focus();
                         }
                     }
-                })
-                .build(app)?;
-
-            // Handle window close -> hide to tray
+                });
+            
+            // On Linux, Tray creation can fail if libappindicator is missing or tray isn't available
+            match tray_builder.build(app) {
+                Ok(_) => println!("[DEBUG] System Tray initialized successfully."),
+                Err(e) => println!("[WARNING] System Tray failed to initialize (expected on some Linux environments): {}", e),
+            }
+            
+            // Handle window close -> hide to tray ONLY if on Windows/Mac or if tray is actually there
+            // For Linux, we default to showing the window initially but allowing standard close if tray fails.
             if let Some(window) = app.get_webview_window("main") {
                 let win = window.clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = win.hide();
+                        #[cfg(not(target_os = "linux"))]
+                        {
+                            api.prevent_close();
+                            let _ = win.hide();
+                        }
+                        // On Linux, we allow standard close unless we want to force hide?
+                        // Let's keep it safe for now: Standard close on Linux.
                     }
                 });
                 let _ = window.show();
@@ -301,9 +326,9 @@ fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
     let mods = *state.hotkey_modifiers.lock();
     let code = *state.hotkey_code.lock();
 
+    println!("[DEBUG] handle_shortcut event: {:?} for shortcut: {:?}", event, shortcut);
     if shortcut.matches(mods, code) && event.state() == ShortcutState::Pressed {
         let recording = { *state.is_recording.lock() };
-        println!("[DEBUG] Shortcut triggered: Recording={}", recording);
 
         if recording {
             stop_recording(app);
@@ -351,7 +376,7 @@ fn start_recording(app: &AppHandle) {
     *recording_guard = true;
 
     play_feedback_sound(880.0);
-    println!(">>> VibeFlow: Recording Toggle ON");
+    println!(">>> VibeFlow: Recording Toggle ON (Flag set to true)");
 
     // NEW LOGIC: We don't spawn a thread here anymore.
     // The thread is already running in main().
@@ -360,7 +385,10 @@ fn start_recording(app: &AppHandle) {
 
     // Position overlay logic remains the same
     // Get active window to determine which monitor the user is looking at
-    let target_monitor = if let Ok(active_window) = active_win_pos_rs::get_active_window() {
+    // CRASH FIX: active_win_pos_rs causes Segfaults on Wayland. Disable it on Linux.
+    let target_monitor = if cfg!(target_os = "linux") {
+        None 
+    } else if let Ok(active_window) = active_win_pos_rs::get_active_window() {
         let active_center_x =
             active_window.position.x + (active_window.position.width / 2.0) as f64;
         let active_center_y =
@@ -403,30 +431,40 @@ fn start_recording(app: &AppHandle) {
                 "[DEBUG] Positioning overlay on monitor: {:?}",
                 monitor.name()
             );
-            let size = monitor.size();
-            // Increase height to 300px to allow for tall vertical stripes without clipping
-            let win_size = overlay
-                .outer_size()
-                .unwrap_or(tauri::PhysicalSize::new(120, 120));
-            let x = monitor.position().x + (size.width as i32 - win_size.width as i32) / 2;
-            // Position 10px from bottom (flush)
-            let y = monitor.position().y + size.height as i32 - win_size.height as i32 - 10;
-            let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
+            #[cfg(not(target_os = "linux"))]
+            {
+                let size = monitor.size();
+                let win_size = overlay
+                    .outer_size()
+                    .unwrap_or(tauri::PhysicalSize::new(120, 120));
+                let x = monitor.position().x + (size.width as i32 - win_size.width as i32) / 2;
+                let y = monitor.position().y + size.height as i32 - win_size.height as i32 - 10;
+                let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
+            }
+            #[cfg(target_os = "linux")]
+            {
+                println!("[DEBUG] Linux/Wayland: Skipping set_position to prevent tao panic. Using compositor default.");
+            }
         } else {
             println!("[ERROR] Could not detect any monitor for overlay positioning.");
         }
 
-        // Force transparency hard
-        let _ = overlay.set_shadow(false);
-        let _ = overlay.set_ignore_cursor_events(true);
-
-        // Try to clear effects? Or just show.
+        // Show the window as early as possible on Linux to ensure it's mapped by the compositor
         let _ = overlay.show();
-        let _ = overlay.set_focus();
 
-        #[cfg(target_os = "windows")]
+        #[cfg(not(target_os = "linux"))]
         {
-            // Windows-specific window settings if needed in future
+            // Force transparency and positioning for Windows/Mac
+            let _ = overlay.set_shadow(false);
+            let _ = overlay.set_ignore_cursor_events(true);
+            let _ = overlay.set_focus();
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            println!("[DEBUG] Linux/Wayland: Showing overlay. Skipping set_position/shadow to prevent tao panic.");
+            // On some Wayland compositors, focus is needed for visibility
+            let _ = overlay.set_focus();
         }
     }
 
@@ -450,5 +488,5 @@ fn stop_recording(app: &AppHandle) {
     }
 
     play_feedback_sound(440.0);
-    println!(">>> VibeFlow: Recording Toggle OFF");
+    println!(">>> VibeFlow: Recording Toggle OFF (Flag set to false)");
 }

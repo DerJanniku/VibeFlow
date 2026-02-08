@@ -62,7 +62,7 @@ impl InferenceEngine {
         let mut full_transcript = String::new();
         let chunk_limit = 16000 * 30; // Hard limit 30s to prevent RAM explosion
         let mut last_inference_time = Instant::now();
-        let inference_interval = Duration::from_millis(600); // Update ghost text every 600ms
+        let inference_interval = Duration::from_millis(300); // Snappier ghost text
 
         loop {
             // We use a short timeout to check for "Silence" (Conversation End)
@@ -129,7 +129,11 @@ impl InferenceEngine {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        // params.set_no_speech_threshold(0.6); // Optional VAD tuning in whisper
+        
+        // Performance Optimization: Use multiple threads
+        // We have 16 cores, let's use 6-8 for speed without lagging the UI
+        let threads = std::cmp::min(8, num_cpus::get() as i32);
+        params.set_n_threads(threads);
 
         if let Err(e) = state.full(params, samples) {
             println!("[ERROR] Whisper Inference Failed: {}", e);

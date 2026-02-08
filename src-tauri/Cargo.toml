@@ -14,12 +14,15 @@ tauri = { version = "2.0.0", features = ["image-png", "tray-icon"] }
 tauri-plugin-shell = "2.0.0"
 tauri-plugin-autostart = "2.0.0"
 tauri-plugin-global-shortcut = "2.0.0"
+tauri-plugin-log = "2.0.0"
 window-vibrancy = "0.5.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
-cpal = "0.15"
+cpal = { version = "0.15", features = ["jack"] }
 rodio = "0.17" # For feedback sounds
+log = "0.4"
+num_cpus = "1.16"
 hound = "3.5"
 enigo = "0.1"
 anyhow = "1.0"
