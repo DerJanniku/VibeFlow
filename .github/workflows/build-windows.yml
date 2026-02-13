@@ -33,6 +33,9 @@ jobs:
         working-directory: ui
         run: npm ci
 
+      - name: Install root dependencies
+        run: npm install
+
       - name: Build Tauri app
         run: npx tauri build
         env:
