@@ -14,4 +14,5 @@ pub struct AppState {
     pub hotkey_modifiers: Arc<Mutex<Modifiers>>,
     pub hotkey_code: Arc<Mutex<Code>>,
     pub selected_model: Arc<Mutex<String>>,
+    pub selected_color: Arc<Mutex<String>>,
 }

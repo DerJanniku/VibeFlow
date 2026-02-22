@@ -54,6 +54,7 @@ async fn main() {
     let hotkey_modifiers = Arc::new(Mutex::new(Modifiers::CONTROL | Modifiers::SHIFT));
     let hotkey_code = Arc::new(Mutex::new(Code::Space));
     let selected_model = Arc::new(Mutex::new("ggml-base.en.bin".to_string()));
+    let selected_color = Arc::new(Mutex::new("Black".to_string()));
 
     // Create a temporary app handle to get the app_data_dir without starting the app
     // Actually, we can just use std::fs since we know where it should be on Windows
@@ -120,6 +121,8 @@ async fn main() {
             modules::commands::get_audio_device,
             modules::commands::save_hotkey,
             modules::commands::get_hotkey,
+            modules::commands::get_color,
+            modules::commands::save_color,
             modules::commands::download_model,
             modules::commands::get_selected_model,
             modules::commands::get_onboarding_status,
@@ -241,6 +244,7 @@ async fn main() {
                 hotkey_modifiers,
                 hotkey_code,
                 selected_model,
+                selected_color,
             };
             app.manage(state);
 

@@ -10,10 +10,39 @@ const isOnboarded = ref(false);
 const loading = ref(true);
 const windowLabel = ref('main');
 
+function applyTheme(color){
+  const root = document.documentElement;
+  switch (color){
+    case ("Black"):
+      root.style.setProperty("--bg", "#000000");
+      root.style.setProperty("--bg-secondary", "#1c1c1e");
+      root.style.setProperty("--bg-tertiary", "#2c2c2e");
+      break;
+    case ("Blue"):
+      root.style.setProperty("--bg", "#000e78");
+      root.style.setProperty("--bg-secondary", "#0e22ba");
+      root.style.setProperty("--bg-tertiary", "#1e34d6");
+      break;
+    case ("White"):
+      root.style.setProperty("--bg", "#FFFFFF");
+      root.style.setProperty("--bg-secondary", "#e2e2e2");
+      root.style.setProperty("--bg-tertiary", "#acacac");
+      break;
+    default:
+      root.style.setProperty("--bg", "#FFFFFF");
+      root.style.setProperty("--bg-secondary", "#e2e2e2");
+      root.style.setProperty("--bg-tertiary", "#acacac");
+      break;
+  }
+}
+
 onMounted(async () => {
     // Detect which window we're in
     const win = await getCurrentWindow();
     windowLabel.value = win.label;
+
+    const savedColor = await invoke('get_color');
+    applyTheme(savedColor);
 
     // Only check onboarding for main window
     if (windowLabel.value === 'main') {
@@ -48,3 +77,4 @@ const handleOnboardingComplete = () => {
     </template>
   </div>
 </template>
+

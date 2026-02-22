@@ -35,7 +35,8 @@
 
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  background: transparent;
+  /* background: transparent; */
+  background: var(--bg);
   /* Default to transparent for Overlay */
   color: var(--text);
   line-height: 1.5;
