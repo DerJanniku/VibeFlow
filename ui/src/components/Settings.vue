@@ -3,6 +3,10 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
+import useTheme from '../../useTheme.js';
+
+const { applyTheme } = useTheme();
+
 const emit = defineEmits(['close']);
 
 const audioDevices = ref([]);
@@ -14,7 +18,7 @@ const selectedTier = ref('fast');
 const downloadProgress = ref(0);
 const isDownloading = ref(false);
 const colorThemes = ref(['Black', 'Blue', 'White']);
-const selectedColor = ref('');
+const selectedColor = ref(localStorage.getItem("color-theme") ?? "Black");
 
 const tiers = [
   { id: 'realfast', name: 'Realfast', desc: 'Tiny', size: '75MB' },
@@ -29,33 +33,6 @@ const tierToFilename = {
     'standard': 'ggml-small.en.bin',
     'pro': 'ggml-large-v3-turbo.bin'
 };
-
-function applyTheme(color){
-  const root = document.documentElement;
-  switch (color){
-    case ("Black"):
-      root.style.setProperty("--bg", "#000000");
-      root.style.setProperty("--bg-secondary", "#1c1c1e");
-      root.style.setProperty("--bg-tertiary", "#2c2c2e");
-      break;
-    case ("Blue"):
-      root.style.setProperty("--bg", "#000e78");
-      root.style.setProperty("--bg-secondary", "#0e22ba");
-      root.style.setProperty("--bg-tertiary", "#1e34d6");
-      break;
-    case ("White"):
-      root.style.setProperty("--bg", "#FFFFFF");
-      root.style.setProperty("--bg-secondary", "#e2e2e2");
-      root.style.setProperty("--bg-tertiary", "#acacac");
-      root.style.setProperty("--text", "000000");
-      break;
-    default:
-      root.style.setProperty("--bg", "#FFFFFF");
-      root.style.setProperty("--bg-secondary", "#e2e2e2");
-      root.style.setProperty("--bg-tertiary", "#acacac");
-      break;
-  }
-}
 
 onMounted(async () => {
     try {
@@ -78,9 +55,6 @@ onMounted(async () => {
             // Clean up code format like "KeyF9" to "F9"
             code.value = keyCode.replace('Key', '').toUpperCase();
         }
-
-        const savedColor = await invoke('get_color');
-        selectedColor.value = savedColor;
     } catch (e) {
         console.error(e);
     }
@@ -128,9 +102,8 @@ const triggerDownload = async () => {
 
 const save = async () => {
     try {
-        await invoke('save_color', {color: selectedColor.value});
-        const savedColor = await invoke('get_color');
-        applyTheme(savedColor);
+        applyTheme(selectedColor.value);
+        localStorage.setItem("color-theme", selectedColor.value);
         await invoke('set_audio_device', { name: selectedDevice.value });
         await invoke('save_hotkey', { modifiers: modifiers.value, code: code.value });
     } catch (e) {
@@ -207,7 +180,7 @@ const save = async () => {
         <!-- Color theme -->
         <section class="section">
             <label class="section-label">Color Theme</label>
-            <select v-model="selectedColor" class="input-field"> <!--Make unique classes for these-->
+            <select v-model="selectedColor" class="input-field"> 
                 <option v-for="color in colorThemes" :key="color" :value="color">{{color}}</option>
             </select>
         </section>

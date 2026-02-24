@@ -24,21 +24,6 @@ pub fn set_audio_device(
 }
 
 #[tauri::command]
-pub fn get_color(state: State<'_, AppState>) -> String {
-    state.selected_color.lock().clone()
-}
-
-#[tauri::command]
-pub fn save_color(app: AppHandle, state: State<'_,AppState>, color: String) -> Result<(), String>{
-    *state.selected_color.lock() = color.clone();
-    let mut config = load_config(&app);
-    config["selected_color"] = serde_json::json!(color);
-    save_config(&app, &config)?;
-
-    Ok(())
-}
-
-#[tauri::command]
 pub fn get_audio_device(state: State<'_, AppState>) -> Option<String> {
     state.selected_device.lock().clone()
 }
