@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# VibeFlow spezifisch
+config.json
+*.log
+legacy_tauri_version/
+
+# OS
+.DS_Store
