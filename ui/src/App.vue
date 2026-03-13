@@ -6,6 +6,10 @@ import Wizard from './components/Wizard.vue';
 import Dashboard from './components/Dashboard.vue';
 import Overlay from './components/Overlay.vue';
 
+import useTheme from '../useTheme.js';
+
+const { applyTheme } = useTheme();
+
 const isOnboarded = ref(false);
 const loading = ref(true);
 const windowLabel = ref('main');
@@ -14,6 +18,8 @@ onMounted(async () => {
     // Detect which window we're in
     const win = await getCurrentWindow();
     windowLabel.value = win.label;
+
+    applyTheme(localStorage.getItem("color-theme") ?? "Black");
 
     // Only check onboarding for main window
     if (windowLabel.value === 'main') {
@@ -48,3 +54,4 @@ const handleOnboardingComplete = () => {
     </template>
   </div>
 </template>
+

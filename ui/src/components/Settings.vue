@@ -3,6 +3,10 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
+import useTheme from '../../useTheme.js';
+
+const { applyTheme } = useTheme();
+
 const emit = defineEmits(['close']);
 
 const audioDevices = ref([]);
@@ -13,6 +17,8 @@ const isRecordingHotkey = ref(false);
 const selectedTier = ref('fast');
 const downloadProgress = ref(0);
 const isDownloading = ref(false);
+const colorThemes = ref(['Black', 'Blue', 'White']);
+const selectedColor = ref(localStorage.getItem("color-theme") ?? "Black");
 
 const tiers = [
   { id: 'realfast', name: 'Realfast', desc: 'Tiny', size: '75MB' },
@@ -96,6 +102,8 @@ const triggerDownload = async () => {
 
 const save = async () => {
     try {
+        applyTheme(selectedColor.value);
+        localStorage.setItem("color-theme", selectedColor.value);
         await invoke('set_audio_device', { name: selectedDevice.value });
         await invoke('save_hotkey', { modifiers: modifiers.value, code: code.value });
     } catch (e) {
@@ -167,6 +175,14 @@ const save = async () => {
                 </div>
                 <span class="hotkey-action">{{ isRecordingHotkey ? 'Press keys...' : 'Click to change' }}</span>
             </div>
+        </section>
+
+        <!-- Color theme -->
+        <section class="section">
+            <label class="section-label">Color Theme</label>
+            <select v-model="selectedColor" class="input-field"> 
+                <option v-for="color in colorThemes" :key="color" :value="color">{{color}}</option>
+            </select>
         </section>
       </div>
 
