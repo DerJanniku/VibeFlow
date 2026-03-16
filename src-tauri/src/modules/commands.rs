@@ -140,20 +140,36 @@ pub async fn download_model(app: AppHandle, tier: String) -> Result<(), String> 
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
             "ggml-large-v3-turbo.bin",
         ),
+        "multilingual" => (
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+            "ggml-base.bin", // For German/other languages
+        ),
         _ => return Err("Invalid model tier selected".to_string()),
     };
 
-    let model_path = app.path().app_data_dir().unwrap().join(filename);
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let model_path = app_data_dir.join(filename);
+    let tmp_path = model_path.with_extension("tmp");
 
     // Save preference to app config (simulated for now by updating state)
     let state = app.state::<AppState>();
     *state.selected_model.lock() = filename.to_string();
 
     if model_path.exists() {
-        println!("[DEBUG] Model {} already exists", filename);
-        app.emit("download-progress", 100)
-            .map_err(|e| e.to_string())?;
-        return Ok(());
+        let meta = std::fs::metadata(&model_path).map_err(|e| e.to_string())?;
+        // Basic check: if it's less than 10MB, it's definitely corrupted for these models
+        if meta.len() > 10 * 1024 * 1024 {
+            log::debug!("[DEBUG] Model {} already exists and seems valid", filename);
+            app.emit("download-progress", 100)
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        } else {
+            log::warn!(
+                "[DEBUG] Existing model {} seems corrupted (too small), re-downloading...",
+                filename
+            );
+            let _ = std::fs::remove_file(&model_path);
+        }
     }
 
     if let Some(parent) = model_path.parent() {
@@ -165,7 +181,7 @@ pub async fn download_model(app: AppHandle, tier: String) -> Result<(), String> 
     let response = reqwest::get(model_url).await.map_err(|e| e.to_string())?;
     let total_size = response.content_length().unwrap_or(0);
 
-    let mut file = tokio::fs::File::create(&model_path)
+    let mut file = tokio::fs::File::create(&tmp_path)
         .await
         .map_err(|e: std::io::Error| e.to_string())?;
     let mut downloaded: u64 = 0;
@@ -184,7 +200,10 @@ pub async fn download_model(app: AppHandle, tier: String) -> Result<(), String> 
         }
     }
 
-    println!("[DEBUG] Model downloaded to {:?}", model_path);
+    // Rename tmp to final
+    std::fs::rename(&tmp_path, &model_path).map_err(|e| e.to_string())?;
+
+    log::info!("[DEBUG] Model downloaded and verified at {:?}", model_path);
     app.emit("download-progress", 100)
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -197,7 +216,14 @@ pub fn get_selected_model(state: tauri::State<AppState>) -> String {
 
 /// Load config from JSON file
 fn load_config(app: &AppHandle) -> serde_json::Value {
-    let config_path = app.path().app_data_dir().unwrap().join("config.json");
+    let app_data_dir = match app.path().app_data_dir() {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("[ERROR] Could not resolve app data dir: {}", e);
+            return serde_json::json!({});
+        }
+    };
+    let config_path = app_data_dir.join("config.json");
     if config_path.exists() {
         if let Ok(data) = std::fs::read_to_string(&config_path) {
             if let Ok(json) = serde_json::from_str(&data) {
@@ -210,7 +236,8 @@ fn load_config(app: &AppHandle) -> serde_json::Value {
 
 /// Save config to JSON file
 fn save_config(app: &AppHandle, config: &serde_json::Value) -> Result<(), String> {
-    let config_path = app.path().app_data_dir().unwrap().join("config.json");
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let config_path = app_data_dir.join("config.json");
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -226,7 +253,7 @@ pub fn get_onboarding_status(app: AppHandle) -> bool {
         .get("onboarded")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    println!("[DEBUG] Onboarding check: onboarded = {}", onboarded);
+    log::debug!("[DEBUG] Onboarding check: onboarded = {}", onboarded);
     onboarded
 }
 
@@ -255,10 +282,10 @@ pub fn complete_onboarding(app: AppHandle) -> Result<(), String> {
             "modifiers": modifiers,
             "code": code
         },
-        "version": "0.3.0"
+        "version": "0.3.3"
     });
 
     save_config(&app, &config)?;
-    println!("[DEBUG] Onboarding completed and saved to config.json");
+    log::info!("[DEBUG] Onboarding completed and saved to config.json");
     Ok(())
 }

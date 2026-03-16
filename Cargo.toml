@@ -29,6 +29,8 @@ zeroize = { version = "1.7", features = ["derive"] } # Security: Memory zeroing
 sysinfo = "0.30" # Monitoring: CPU/RAM usage
 eframe = "0.28" # GUI Framework
 egui = "0.28"
+tauri-plugin-updater = "2.10.0"
+tauri-plugin-process = "2.3.1"
 
 [profile.release]
 lto = "fat"

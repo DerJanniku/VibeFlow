@@ -38,22 +38,39 @@ impl InferenceEngine {
         let model_path = self.base_path.join(model_filename);
 
         if !model_path.exists() {
-            println!("[ERROR] Whisper model not found at {:?}", model_path);
+            log::error!("[ERROR] Whisper model not found at {:?}", model_path);
             return SensitiveTranscript::new(format!(
                 "Error: AI model not found. Please download {} in settings.",
                 model_filename
             ));
         }
 
-        let ctx = WhisperContext::new_with_params(
+        let ctx = match WhisperContext::new_with_params(
             &model_path.to_string_lossy(),
             WhisperContextParameters::default(),
-        )
-        .expect("failed to load model");
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("[ERROR] Failed to load Whisper model: {}", e);
+                return SensitiveTranscript::new(format!(
+                    "Error: Failed to load AI model ({}). It might be corrupted.",
+                    e
+                ));
+            }
+        };
 
-        let mut state = ctx.create_state().expect("failed to create state");
+        let mut state = match ctx.create_state() {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("[ERROR] Failed to create Whisper state: {}", e);
+                return SensitiveTranscript::new(format!(
+                    "Error: Failed to initialize AI state ({}).",
+                    e
+                ));
+            }
+        };
 
-        println!(
+        log::debug!(
             "[DEBUG] Inference Loop Started for model: {}",
             model_filename
         );
@@ -62,7 +79,7 @@ impl InferenceEngine {
         let mut full_transcript = String::new();
         let chunk_limit = 16000 * 30; // Hard limit 30s to prevent RAM explosion
         let mut last_inference_time = Instant::now();
-        let inference_interval = Duration::from_millis(300); // Snappier ghost text
+        let inference_interval = Duration::from_millis(100); // 100ms for INSTANT feedback (User requested "fast as fuck")
 
         loop {
             // We use a short timeout to check for "Silence" (Conversation End)
@@ -90,7 +107,7 @@ impl InferenceEngine {
 
                     // Safety Clean
                     if samples_buffer.len() > chunk_limit {
-                        println!("[WARN] Buffer overflow protection. Flushing.");
+                        log::warn!("[WARN] Buffer overflow protection. Flushing.");
                         break;
                     }
                 }
@@ -102,7 +119,7 @@ impl InferenceEngine {
                     // In "Always On" mode, audio.rs STOPS sending data when silence/unflagged.
                     // So this timeout means "Recording Session Ended".
                     if !samples_buffer.is_empty() {
-                        println!("[DEBUG] Silence detected. Finalizing transcription...");
+                        log::debug!("[DEBUG] Silence detected. Finalizing transcription...");
                         let text = self.run_inference(&mut state, &samples_buffer);
                         full_transcript.push_str(&text);
 
@@ -115,38 +132,93 @@ impl InferenceEngine {
             }
         }
 
-        println!(
-            "[DEBUG] Whisper Final Result: \"{}\"",
-            full_transcript.trim()
-        );
-        SensitiveTranscript::new(full_transcript.trim().to_string())
+        // FINAL HALLUCINATION CHECK
+        let final_text = full_transcript.trim();
+        if final_text.eq_ignore_ascii_case("you")
+            || final_text.eq_ignore_ascii_case("thank you")
+            || final_text.is_empty()
+        {
+            log::debug!("[DEBUG] Discarding hallucination: '{}'", final_text);
+            return SensitiveTranscript::new(String::new());
+        }
+
+        log::info!("[DEBUG] Whisper Final Result: \"{}\"", final_text);
+        SensitiveTranscript::new(final_text.to_string())
     }
 
     fn run_inference(&self, state: &mut whisper_rs::WhisperState, samples: &[f32]) -> String {
+        // ENERGY GATE (VAD Lite)
+        // If audio is silence, don't run heavy inference
+        let sum: f32 = samples.iter().map(|&x| x * x).sum();
+        let rms = if !samples.is_empty() {
+            (sum / samples.len() as f32).sqrt()
+        } else {
+            0.0
+        };
+
+        // LOG RMS to see if we are cutting off speech
+        log::debug!("[DEBUG] Inference RMS: {:.5} (Threshold: 0.0003)", rms);
+
+        if rms < 0.0003 {
+            // Threshold for silence (LOWERED for Q9 Mic)
+            // log::debug!("[DEBUG] Skipping inference (Silence, RMS={:.5})", rms);
+            return String::new();
+        }
+
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(Some("en"));
+        params.set_language(Some("de")); // German Support Requested
+        params.set_translate(false); // Transcribe, don't translate to English
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
-        
-        // Performance Optimization: Use multiple threads
-        // We have 16 cores, let's use 6-8 for speed without lagging the UI
-        let threads = std::cmp::min(8, num_cpus::get() as i32);
+
+        // Anti-Hallucination Params
+        params.set_no_speech_thold(0.6); // Default is 0.6, consider raising?
+        params.set_logprob_thold(-1.0);
+
+        // Performance Optimization: UNLIMITED POWER
+        // User requested "fast as fuck" -> Use ALL available cores
+        let threads = num_cpus::get() as i32;
         params.set_n_threads(threads);
 
         if let Err(e) = state.full(params, samples) {
-            println!("[ERROR] Whisper Inference Failed: {}", e);
+            log::error!("[ERROR] Whisper Inference Failed: {}", e);
             return String::new();
         }
 
         let mut result = String::new();
         let num_segments = state.full_n_segments().unwrap_or(0);
+        let mut full_raw = String::new();
+
+        // Deduplication Logic
+        let mut last_segment = String::new();
+
         for i in 0..num_segments {
             if let Ok(segment) = state.full_get_segment_text(i) {
+                full_raw.push_str(&segment);
+                let clean_seg = segment.trim();
+
+                // Filter common hallucinations
+                if clean_seg.eq_ignore_ascii_case("you") || clean_seg.eq_ignore_ascii_case("thanks")
+                {
+                    continue;
+                }
+                // Filter repeats
+                if clean_seg == last_segment {
+                    continue;
+                }
+
                 result.push_str(&segment);
+                last_segment = clean_seg.to_string();
             }
         }
+
+        log::debug!(
+            "[DEBUG] RAW WHISPER: '{}' -> FILTERED: '{}'",
+            full_raw.trim(),
+            result.trim()
+        );
         result
     }
 }

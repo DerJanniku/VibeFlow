@@ -1,4 +1,4 @@
-#[cfg(target_os="linux")]
+#[cfg(target_os = "linux")]
 use crate::modules::linux_paste::LinuxPaste;
 
 use active_win_pos_rs::get_active_window;
@@ -21,8 +21,8 @@ impl OSIntegration {
     pub fn get_active_app_name() -> String {
         #[cfg(target_os = "linux")]
         {
-             // On Linux, active_win_pos_rs can crash on Wayland.
-             "Linux App".to_string()
+            // On Linux, active_win_pos_rs can crash on Wayland.
+            "Linux App".to_string()
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -42,7 +42,7 @@ impl OSIntegration {
 
         println!("[DEBUG] paste_text: {}", text);
 
-        #[cfg(target_os="linux")]
+        #[cfg(target_os = "linux")]
         {
             return LinuxPaste::paste_text(text).map_err(|e| {
                 println!("[LINUX] Paste failed: {}", e);
@@ -54,17 +54,20 @@ impl OSIntegration {
         {
             // WINDOWS STRATEGY: Enigo (Reliable on Windows)
             let result = std::panic::catch_unwind(|| {
-                let mut clipboard = Clipboard::new().map_err(|e| anyhow::anyhow!("Clipboard init failed: {}", e))?;
+                let mut clipboard = Clipboard::new()
+                    .map_err(|e| anyhow::anyhow!("Clipboard init failed: {}", e))?;
                 let original_content = clipboard.get_text().unwrap_or_default();
-                clipboard.set_text(text.to_owned()).map_err(|e| anyhow::anyhow!("Clipboard set failed: {}", e))?;
-                thread::sleep(Duration::from_millis(100));
-                
+                clipboard
+                    .set_text(text.to_owned())
+                    .map_err(|e| anyhow::anyhow!("Clipboard set failed: {}", e))?;
+                thread::sleep(Duration::from_millis(200));
+
                 let mut enigo = Enigo::new();
                 enigo.key_down(EnigoKey::Control);
                 enigo.key_click(EnigoKey::Layout('v'));
                 enigo.key_up(EnigoKey::Control);
-                
-                thread::sleep(Duration::from_millis(500));
+
+                thread::sleep(Duration::from_millis(200));
                 let _ = clipboard.set_text(original_content);
                 Ok::<(), anyhow::Error>(())
             });
@@ -73,10 +76,10 @@ impl OSIntegration {
                 Err(_) => Err(anyhow::anyhow!("Paste operation panicked")),
             }
         }
-        
+
         #[cfg(target_os = "macos")]
         {
-             Ok(())
+            Ok(())
         }
     }
 
@@ -91,7 +94,7 @@ impl OSIntegration {
                 Command::SelectAll => "ctrl+a",
                 Command::Enter => "Return",
             };
-            
+
             return LinuxPaste::execute_command(key_sequence);
         }
 
@@ -115,17 +118,17 @@ impl OSIntegration {
                         enigo.key_up(EnigoKey::Control);
                     }
                     crate::modules::llm::Command::Italic => {
-                         enigo.key_down(EnigoKey::Control);
-                         enigo.key_click(EnigoKey::Layout('i'));
-                         enigo.key_up(EnigoKey::Control);
+                        enigo.key_down(EnigoKey::Control);
+                        enigo.key_click(EnigoKey::Layout('i'));
+                        enigo.key_up(EnigoKey::Control);
                     }
                     crate::modules::llm::Command::SelectAll => {
-                         enigo.key_down(EnigoKey::Control);
-                         enigo.key_click(EnigoKey::Layout('a'));
-                         enigo.key_up(EnigoKey::Control);
+                        enigo.key_down(EnigoKey::Control);
+                        enigo.key_click(EnigoKey::Layout('a'));
+                        enigo.key_up(EnigoKey::Control);
                     }
                     crate::modules::llm::Command::Enter => {
-                         enigo.key_click(EnigoKey::Return);
+                        enigo.key_click(EnigoKey::Return);
                     }
                 }
             });
@@ -134,10 +137,10 @@ impl OSIntegration {
                 Err(_) => Err(anyhow::anyhow!("Command execution panicked")),
             }
         }
-        
+
         #[cfg(target_os = "macos")]
         {
-             Ok(())
+            Ok(())
         }
     }
 }

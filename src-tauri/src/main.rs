@@ -29,7 +29,7 @@ use tokio::sync::mpsc;
 
 #[tauri::command]
 fn ui_ready() {
-    println!("[DEBUG] >>> OVERLAY UI IS READY AND CONNECTED! <<<");
+    log::debug!("[DEBUG] >>> OVERLAY UI IS READY AND CONNECTED! <<<");
 }
 
 #[tokio::main]
@@ -44,31 +44,50 @@ async fn main() {
             "Unknown panic"
         };
         let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "unknown location".to_string());
-        println!("[CRITICAL PANIC] {} at {}", msg, location);
+        log::error!("[CRITICAL PANIC] {} at {}", msg, location);
     }));
 
-    let is_recording = Arc::new(Mutex::new(false));
+    // START RECORDING BY DEFAULT (Always-On)
+    let is_recording = Arc::new(Mutex::new(true));
     let tx_audio = Arc::new(Mutex::new(None));
     let amplitude = Arc::new(Mutex::new(0.0));
     let selected_device = Arc::new(Mutex::new(None));
     let hotkey_modifiers = Arc::new(Mutex::new(Modifiers::CONTROL | Modifiers::SHIFT));
     let hotkey_code = Arc::new(Mutex::new(Code::Space));
-    let selected_model = Arc::new(Mutex::new("ggml-base.en.bin".to_string()));
+    
+    // Switch to Multilingual Model for German Support
+    let selected_model = Arc::new(Mutex::new("ggml-base.bin".to_string()));
 
     // Create a temporary app handle to get the app_data_dir without starting the app
     // Actually, we can just use std::fs since we know where it should be on Windows
     let app_data = std::env::var("APPDATA")
         .ok()
-        .map(|ad| std::path::PathBuf::from(ad).join("com.vibeflow.app"))
+        .map(|ad| std::path::PathBuf::from(ad).join("com.derjanniku.vibeflow"))
         .unwrap_or_default();
 
     let config_path = app_data.join("config.json");
     if config_path.exists() {
         if let Ok(data) = std::fs::read_to_string(&config_path) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                if let Some(m) = json.get("model").and_then(|v| v.as_str()) {
-                    *selected_model.lock() = m.to_string();
-                }
+                // FORCE RESET CHECK
+                let version_match = json.get("version")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v == "0.3.3")
+                    .unwrap_or(false);
+
+                if !version_match {
+                    log::warn!("[WARNING] Config version mismatch (or missing). Forcing factory reset for Patch 6.");
+                    // We only delete config.json to force onboarding. We KEEP the model if it exists/valid (handled later).
+                    // Actually, safe bet is to let logic proceed but IGNORE the loaded config.
+                    // Or better: Delete the file so 'setup' runs.
+                    drop(json); // release borrow
+                    let _ = std::fs::remove_file(&config_path);
+                    log::info!("[INFO] Config wiped. Onboarding will trigger.");
+                } else {
+                    // Only load if version matches
+                    if let Some(m) = json.get("model").and_then(|v| v.as_str()) {
+                        *selected_model.lock() = m.to_string();
+                    }
                 if let Some(d) = json.get("device").and_then(|v| v.as_str()) {
                     *selected_device.lock() = Some(d.to_string());
                 }
@@ -97,6 +116,7 @@ async fn main() {
                     }
                 }
             }
+            }
         }
     }
 
@@ -104,6 +124,8 @@ async fn main() {
         .plugin(tauri_plugin_log::Builder::new()
             .level(log::LevelFilter::Debug)
             .build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
@@ -129,6 +151,42 @@ async fn main() {
         ])
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
+            if !app_data.exists() {
+                std::fs::create_dir_all(&app_data)?;
+            }
+            
+            // Default to Multilingual Base
+            let model_name = "ggml-base.bin";
+            let dest_path = app_data.join(model_name);
+            
+            let mut force_restore = false;
+            if dest_path.exists() {
+                if let Ok(meta) = std::fs::metadata(&dest_path) {
+                     if meta.len() < 1000000 { // < 1MB
+                        log::warn!("[WARNING] Model file exists but is too small/corrupted. Forcing restore.");
+                        force_restore = true;
+                     }
+                }
+            }
+
+            if (!dest_path.exists() || force_restore) && model_name == "ggml-base.en.bin" {
+                log::info!("[INFO] Model not found or corrupted. Attempting to restore from bundle...");
+                match app.path().resolve("resources/ggml-base.en.bin", tauri::path::BaseDirectory::Resource) {
+                    Ok(resource_path) => {
+                        if resource_path.exists() {
+                            if let Err(e) = std::fs::copy(&resource_path, &dest_path) {
+                                log::error!("[ERROR] Failed to copy bundled model: {}", e);
+                            } else {
+                                log::info!("[INFO] Bundled model installed successfully to {:?}", dest_path);
+                            }
+                        } else {
+                            log::warn!("[WARNING] Bundled resource not found at {:?}", resource_path);
+                        }
+                    }
+                    Err(e) => log::warn!("[WARNING] Could not resolve bundled resource path: {}", e),
+                }
+            }
+
             let inference_engine = Arc::new(InferenceEngine::new(app_data));
 
             // DerJannik Branding
@@ -143,8 +201,8 @@ async fn main() {
                                     by DerJannik
             "#
             );
-            println!("[INFO] Made by DerJannik | https://de.fiverr.com/s/xXgY29x");
-            println!("[INFO] VibeFlow Professional initialized.");
+            log::info!("[INFO] Made by DerJanniku | https://de.fiverr.com/s/xXgY29x");
+            log::info!("[INFO] VibeFlow initialized.");
 
             let mods_val = *hotkey_modifiers.lock();
             let code_val = *hotkey_code.lock();
@@ -165,24 +223,24 @@ async fn main() {
                     amp_clone.clone(),
                     device_clone,
                 );
-                if let Ok(s) = stream {
-                    use cpal::traits::StreamTrait;
-                    let _ = s.play();
-
-                    println!(
-                        "[DEBUG] Audio Stream Started (Always-On Mode) - Listening to buffer..."
-                    );
-
-                    loop {
-                        let amp = *amp_clone.lock();
-                        // Global emit of amplitude for visualizer (even when not recording, for "alive" feel)
-                        // Or maybe only when recording? Let's keep it always for now for "Dynamic Island" feel.
-                        let _ = app_handle.emit("amplitude", amp);
-
-                        std::thread::sleep(std::time::Duration::from_millis(15));
+                match stream {
+                    Ok(s) => {
+                        use cpal::traits::StreamTrait;
+                        if let Err(e) = s.play() {
+                            log::error!("[ERROR] Failed to play audio stream: {}", e);
+                        } else {
+                            log::debug!("[DEBUG] Audio Stream Started (Always-On Mode) - Listening to buffer...");
+                            // Keep thread alive
+                            loop {
+                                let amp = *amp_clone.lock();
+                                let _ = app_handle.emit("amplitude", amp);
+                                std::thread::sleep(std::time::Duration::from_millis(15));
+                            }
+                        }
                     }
-                } else {
-                    println!("[ERROR] Failed to start audio stream!");
+                    Err(e) => {
+                        log::error!("[CRITICAL] Failed to start audio stream: {}", e);
+                    }
                 }
             });
 
@@ -192,7 +250,7 @@ async fn main() {
             let model_filename = selected_model.lock().clone();
 
             tauri::async_runtime::spawn(async move {
-                println!(
+                log::debug!(
                     "[DEBUG] Starting transcription loop with model: {}...",
                     model_filename
                 );
@@ -212,7 +270,7 @@ async fn main() {
                         _ => continue,
                     };
 
-                    println!("[DEBUG] Final Refined: \"{}\"", &refined);
+                    log::debug!("[DEBUG] Final Refined: \"{}\"", &refined);
                     let _ = app_handle_2.emit("transcript", &refined);
 
                     if let Some(cmd) = command {
@@ -256,7 +314,7 @@ async fn main() {
 
             let tray_icon = app.default_window_icon().cloned()
                 .unwrap_or_else(|| {
-                    println!("[WARNING] Default window icon not found, using empty icon.");
+                    log::warn!("[WARNING] Default window icon not found, using empty icon.");
                     tauri::image::Image::new(&[], 0, 0)
                 });
 
@@ -292,8 +350,8 @@ async fn main() {
             
             // On Linux, Tray creation can fail if libappindicator is missing or tray isn't available
             match tray_builder.build(app) {
-                Ok(_) => println!("[DEBUG] System Tray initialized successfully."),
-                Err(e) => println!("[WARNING] System Tray failed to initialize (expected on some Linux environments): {}", e),
+                Ok(_) => log::debug!("[DEBUG] System Tray initialized successfully."),
+                Err(e) => log::warn!("[WARNING] System Tray failed to initialize (expected on some Linux environments): {}", e),
             }
             
             // Handle window close -> hide to tray ONLY if on Windows/Mac or if tray is actually there
@@ -325,7 +383,7 @@ fn handle_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
     let mods = *state.hotkey_modifiers.lock();
     let code = *state.hotkey_code.lock();
 
-    println!("[DEBUG] handle_shortcut event: {:?} for shortcut: {:?}", event, shortcut);
+    log::debug!("[DEBUG] handle_shortcut event: {:?} for shortcut: {:?}", event, shortcut);
     if shortcut.matches(mods, code) && event.state() == ShortcutState::Pressed {
         let recording = { *state.is_recording.lock() };
 
@@ -347,7 +405,7 @@ pub fn re_register_shortcut(app: &AppHandle) -> Result<(), tauri_plugin_global_s
 
     let shortcut = Shortcut::new(Some(mods), code);
     app.global_shortcut().register(shortcut)?;
-    println!("[DEBUG] Hotkey re-registered: {:?} + {:?}", mods, code);
+    log::debug!("[DEBUG] Hotkey re-registered: {:?} + {:?}", mods, code);
     Ok(())
 }
 
@@ -375,7 +433,7 @@ fn start_recording(app: &AppHandle) {
     *recording_guard = true;
 
     play_feedback_sound(880.0);
-    println!(">>> VibeFlow: Recording Toggle ON (Flag set to true)");
+    log::info!(">>> VibeFlow: Recording Toggle ON (Flag set to true)");
 
     // NEW LOGIC: We don't spawn a thread here anymore.
     // The thread is already running in main().
@@ -426,7 +484,7 @@ fn start_recording(app: &AppHandle) {
 
     if let Some(overlay) = app.get_webview_window("overlay") {
         if let Some(monitor) = final_monitor {
-            println!(
+            log::debug!(
                 "[DEBUG] Positioning overlay on monitor: {:?}",
                 monitor.name()
             );
@@ -445,7 +503,7 @@ fn start_recording(app: &AppHandle) {
                 println!("[DEBUG] Linux/Wayland: Skipping set_position to prevent tao panic. Using compositor default.");
             }
         } else {
-            println!("[ERROR] Could not detect any monitor for overlay positioning.");
+            log::error!("[ERROR] Could not detect any monitor for overlay positioning.");
         }
 
         // Show the window as early as possible on Linux to ensure it's mapped by the compositor
@@ -456,14 +514,14 @@ fn start_recording(app: &AppHandle) {
             // Force transparency and positioning for Windows/Mac
             let _ = overlay.set_shadow(false);
             let _ = overlay.set_ignore_cursor_events(true);
-            let _ = overlay.set_focus();
+            // let _ = overlay.set_focus(); // REMOVED: Steals focus from text fields
         }
 
         #[cfg(target_os = "linux")]
         {
-            println!("[DEBUG] Linux/Wayland: Showing overlay. Skipping set_position/shadow to prevent tao panic.");
+            log::debug!("[DEBUG] Linux/Wayland: Showing overlay. Skipping set_position/shadow to prevent tao panic.");
             // On some Wayland compositors, focus is needed for visibility
-            let _ = overlay.set_focus();
+            // let _ = overlay.set_focus(); // REMOVED
         }
     }
 
@@ -487,5 +545,5 @@ fn stop_recording(app: &AppHandle) {
     }
 
     play_feedback_sound(440.0);
-    println!(">>> VibeFlow: Recording Toggle OFF (Flag set to false)");
+    log::info!(">>> VibeFlow: Recording Toggle OFF (Flag set to false)");
 }

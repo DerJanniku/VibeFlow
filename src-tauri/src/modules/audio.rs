@@ -49,31 +49,44 @@ impl AudioEngine {
         // 3. Define the Stream Builder (Closure)
         let build_stream_fn = |device: &cpal::Device| -> Result<cpal::Stream> {
             let name = device.name().unwrap_or("unknown".to_string());
-            println!("[DEBUG] Trying device: {}", name);
-            
+            log::debug!("[DEBUG] Trying device: {}", name);
+
             // SMART CONFIG SELECTION (Universal)
             let supported_configs = device.supported_input_configs()?;
             let mut selected_config = None;
-            
+
             for config_range in supported_configs {
-                 let entry = config_range.with_max_sample_rate();
-                 if selected_config.is_none() {
-                     selected_config = Some(entry);
-                     continue;
-                 }
-                 let current = selected_config.as_ref().unwrap();
-                 if entry.sample_format() == cpal::SampleFormat::F32 && current.sample_format() != cpal::SampleFormat::F32 {
-                     selected_config = Some(entry);
-                 }
+                let entry = config_range.with_max_sample_rate();
+                if selected_config.is_none() {
+                    selected_config = Some(entry);
+                    continue;
+                }
+                let current = selected_config.as_ref().unwrap();
+
+                // PREFER I16 (Standard Windows Audio) over F32 to fix "Silence" issues
+                if entry.sample_format() == cpal::SampleFormat::I16
+                    && current.sample_format() != cpal::SampleFormat::I16
+                {
+                    selected_config = Some(entry);
+                }
             }
 
-            let config = selected_config
-                .ok_or_else(|| anyhow!("No supported input config found"))?;
-                
+            let config =
+                selected_config.ok_or_else(|| anyhow!("No supported input config found"))?;
+
+            let msg = format!(
+                "[AUDIO CONFIG] Channels={}, SampleRate={}, Format={:?}",
+                config.channels(),
+                config.sample_rate().0,
+                config.sample_format()
+            );
+            log::error!("{}", msg);
+            println!("{}", msg);
+
             let source_sample_rate = config.sample_rate().0 as f32;
             let source_channels = config.channels() as usize;
             let target_sample_rate = 16000.0;
-            
+
             let tx_clone = tx.clone();
             let amp_clone = amplitude.clone();
             let is_rec_clone = is_recording.clone();
@@ -81,81 +94,116 @@ impl AudioEngine {
             let mut last_sample_pos = 0.0;
             let mut ring_buffer: VecDeque<f32> = VecDeque::with_capacity(RING_BUFFER_SIZE);
             let mut was_recording = false;
-            let err_fn = |err| println!("[ERROR] Audio stream error: {}", err);
+            let err_fn = |err| log::error!("[ERROR] Audio stream error: {}", err);
 
             match config.sample_format() {
-                cpal::SampleFormat::F32 => {
-                    device.build_input_stream(
+                cpal::SampleFormat::F32 => device
+                    .build_input_stream(
                         &config.into(),
                         move |data: &[f32], _: &_| {
-                             Self::process_audio_chunk(
-                                 data, &tx_clone, &is_rec_clone, &amp_clone, 
-                                 source_channels, source_sample_rate, target_sample_rate, 
-                                 &mut resample_buffer, &mut last_sample_pos, &mut ring_buffer, &mut was_recording
+                            Self::process_audio_chunk(
+                                data,
+                                &tx_clone,
+                                &is_rec_clone,
+                                &amp_clone,
+                                source_channels,
+                                source_sample_rate,
+                                target_sample_rate,
+                                &mut resample_buffer,
+                                &mut last_sample_pos,
+                                &mut ring_buffer,
+                                &mut was_recording,
                             );
                         },
-                        err_fn, None
-                    ).map_err(|e| anyhow!(e))
-                },
-                cpal::SampleFormat::I16 => {
-                    device.build_input_stream(
+                        err_fn,
+                        None,
+                    )
+                    .map_err(|e| anyhow!(e)),
+                cpal::SampleFormat::I16 => device
+                    .build_input_stream(
                         &config.into(),
                         move |data: &[i16], _: &_| {
-                            let float_data: Vec<f32> = data.iter().map(|&x| x as f32 / 32768.0).collect();
-                             Self::process_audio_chunk(
-                                 &float_data, &tx_clone, &is_rec_clone, &amp_clone, 
-                                 source_channels, source_sample_rate, target_sample_rate, 
-                                 &mut resample_buffer, &mut last_sample_pos, &mut ring_buffer, &mut was_recording
+                            let float_data: Vec<f32> =
+                                data.iter().map(|&x| x as f32 / 32768.0).collect();
+                            Self::process_audio_chunk(
+                                &float_data,
+                                &tx_clone,
+                                &is_rec_clone,
+                                &amp_clone,
+                                source_channels,
+                                source_sample_rate,
+                                target_sample_rate,
+                                &mut resample_buffer,
+                                &mut last_sample_pos,
+                                &mut ring_buffer,
+                                &mut was_recording,
                             );
                         },
-                        err_fn, None
-                    ).map_err(|e| anyhow!(e))
-                },
-                cpal::SampleFormat::U16 => {
-                     device.build_input_stream(
+                        err_fn,
+                        None,
+                    )
+                    .map_err(|e| anyhow!(e)),
+                cpal::SampleFormat::U16 => device
+                    .build_input_stream(
                         &config.into(),
                         move |data: &[u16], _: &_| {
-                            let float_data: Vec<f32> = data.iter().map(|&x| (x as f32 - 32768.0) / 32768.0).collect();
-                             Self::process_audio_chunk(
-                                 &float_data, &tx_clone, &is_rec_clone, &amp_clone, 
-                                 source_channels, source_sample_rate, target_sample_rate, 
-                                 &mut resample_buffer, &mut last_sample_pos, &mut ring_buffer, &mut was_recording
+                            let float_data: Vec<f32> = data
+                                .iter()
+                                .map(|&x| (x as f32 - 32768.0) / 32768.0)
+                                .collect();
+                            Self::process_audio_chunk(
+                                &float_data,
+                                &tx_clone,
+                                &is_rec_clone,
+                                &amp_clone,
+                                source_channels,
+                                source_sample_rate,
+                                target_sample_rate,
+                                &mut resample_buffer,
+                                &mut last_sample_pos,
+                                &mut ring_buffer,
+                                &mut was_recording,
                             );
                         },
-                        err_fn, None
-                    ).map_err(|e| anyhow!(e))
-                }
-                _ => Err(anyhow!("Unsupported sample format"))
+                        err_fn,
+                        None,
+                    )
+                    .map_err(|e| anyhow!(e)),
+                _ => Err(anyhow!("Unsupported sample format")),
             }
         };
 
         // 4. Execute Device Selection Strategy (STRICT OS SEPARATION)
-        
+
         #[cfg(target_os = "linux")]
         {
-            println!("[DEBUG] Using LINUX-Specific Device Selection Strategy (Auto-Healing)");
+            log::debug!("[DEBUG] Using LINUX-Specific Device Selection Strategy (Auto-Healing)");
             // A. Specific Device
             if let Some(name) = device_name {
-                 let device = host.input_devices()?
+                let device = host
+                    .input_devices()?
                     .find(|x| x.name().map(|n| n == name).unwrap_or(false))
                     .ok_or(anyhow!("Device not found"))?;
                 return build_stream_fn(&device);
             }
             // B. Default
-            println!("[DEBUG] Trying Default Device...");
+            log::debug!("[DEBUG] Trying Default Device...");
             if let Some(default_device) = host.default_input_device() {
                 if let Ok(stream) = build_stream_fn(&default_device) {
-                    println!("[DEBUG] Host Default worked.");
+                    log::debug!("[DEBUG] Host Default worked.");
                     return Ok(stream);
                 }
             }
             // C. Auto-Heal (Loop All)
-            println!("[DEBUG] Default failed. Starting Auto-Healing...");
+            log::debug!("[DEBUG] Default failed. Starting Auto-Healing...");
             if let Ok(devices) = host.input_devices() {
                 for device in devices {
                     if let Ok(stream) = build_stream_fn(&device) {
-                         println!("[DEBUG] Auto-Healing connected to: {:?}", device.name().unwrap_or_default());
-                         return Ok(stream);
+                        log::debug!(
+                            "[DEBUG] Auto-Healing connected to: {:?}",
+                            device.name().unwrap_or_default()
+                        );
+                        return Ok(stream);
                     }
                 }
             }
@@ -164,24 +212,47 @@ impl AudioEngine {
 
         #[cfg(target_os = "windows")]
         {
-            println!("[DEBUG] Using WINDOWS-Specific Device Selection Strategy (Standard)");
+            log::debug!("[DEBUG] Using WINDOWS-Specific Device Selection Strategy (Standard)");
             // A. Specific Device
             if let Some(name) = device_name {
-                 let device = host.input_devices()?
-                    .find(|x| x.name().map(|n| n == name).unwrap_or(false))
-                    .ok_or(anyhow!("Device not found"))?;
-                return build_stream_fn(&device);
+                log::debug!("[DEBUG] Attempting to connect to specific device: {}", name);
+                if let Ok(devices) = host.input_devices() {
+                    if let Some(device) = devices.into_iter().find(|x| {
+                        if let Ok(n) = x.name() {
+                            // 1. Try Exact Match
+                            if n == name {
+                                return true;
+                            }
+                            // 2. Try Q9 Mapping (Display Name -> Raw Name)
+                            if name == "Q9 Microphone 🎙️" && n.to_uppercase().contains("Q9") {
+                                return true;
+                            }
+                        }
+                        false
+                    }) {
+                        log::debug!("[DEBUG] Specific device found. Connecting...");
+                        return build_stream_fn(&device);
+                    } else {
+                        log::warn!(
+                            "[WARNING] Configured device '{}' not found. Falling back to default.",
+                            name
+                        );
+                    }
+                }
             }
             // B. Default Only (Standard behavior)
-            let device = host.default_input_device()
+            log::debug!("[DEBUG] Connecting to Default Input Device...");
+            let device = host
+                .default_input_device()
                 .ok_or_else(|| anyhow!("No default input device found"))?;
             build_stream_fn(&device)
         }
 
         #[cfg(target_os = "macos")]
         {
-             // MacOS Strategy (Similar to Windows)
-            let device = host.default_input_device()
+            // MacOS Strategy (Similar to Windows)
+            let device = host
+                .default_input_device()
                 .ok_or_else(|| anyhow!("No default input device found"))?;
             build_stream_fn(&device)
         }
@@ -192,17 +263,17 @@ impl AudioEngine {
         let devices = match host.input_devices() {
             Ok(d) => d,
             Err(e) => {
-                println!("[ERROR] Failed to get input devices: {}", e);
+                log::error!("[ERROR] Failed to get input devices: {}", e);
                 return Ok(vec!["Default Microphone".to_string()]);
             }
         };
 
         let mut names = Vec::new();
-        println!("[DEBUG] CPAL Host: {}", host.id().name());
+        log::debug!("[DEBUG] CPAL Host: {}", host.id().name());
 
         for device in devices {
             if let Ok(name) = device.name() {
-                println!("[DEBUG] RAW DEVICE NAME: \"{}\"", name);
+                log::debug!("[DEBUG] RAW DEVICE NAME: \"{}\"", name);
 
                 let mut display_name = name.clone();
                 if name.to_uppercase().contains("Q9") {
@@ -222,7 +293,7 @@ impl AudioEngine {
                     names.push(display_name);
                 }
             } else {
-                println!("[DEBUG] Could not query name for a device");
+                log::debug!("[DEBUG] Could not query name for a device");
             }
         }
 
@@ -230,7 +301,7 @@ impl AudioEngine {
             names.push("Default Microphone".to_string());
         }
 
-        println!("[DEBUG] Final selection for UI: {:?}", names);
+        log::debug!("[DEBUG] Final selection for UI: {:?}", names);
         Ok(names)
     }
 
@@ -245,18 +316,21 @@ impl AudioEngine {
         resample_buf: &mut Vec<f32>,
         last_pos: &mut f32,
         ring_buf: &mut VecDeque<f32>,
-        was_rec: &mut bool
+        was_rec: &mut bool,
     ) {
         let recording_now = *is_rec.lock();
 
-        // 1. Amplitude (RMS)
-        let sum: f32 = data.iter().map(|&x| x * x).sum();
-        let rms = if !data.is_empty() {
-            (sum / data.len() as f32).sqrt()
+        // Calculate RMS for Amplitude Update (UI)
+        let raw_sum: f32 = data.iter().map(|&x| x * x).sum();
+        let raw_rms = if !data.is_empty() {
+            (raw_sum / data.len() as f32).sqrt()
         } else {
             0.0
         };
-        *amp.lock() = rms;
+
+        // 1. Amplitude (RMS)
+        // Re-use calculated RMS
+        *amp.lock() = raw_rms;
 
         // 2. Downmix
         let mut mono_data = Vec::with_capacity(data.len() / channels);
@@ -292,24 +366,37 @@ impl AudioEngine {
         }
 
         if !processed_chunk.is_empty() {
-             // --- REWIND LOGIC ---
-             for &sample in &processed_chunk {
-                 if ring_buf.len() >= RING_BUFFER_SIZE {
-                     ring_buf.pop_front();
-                 }
-                 ring_buf.push_back(sample);
-             }
+            // --- REWIND LOGIC ---
+            for &sample in &processed_chunk {
+                if ring_buf.len() >= RING_BUFFER_SIZE {
+                    ring_buf.pop_front();
+                }
+                ring_buf.push_back(sample);
+            }
 
-             if recording_now && !*was_rec {
-                 let history: Vec<f32> = ring_buf.iter().cloned().collect();
-                 let _ = tx.try_send(SensitiveAudio::new(history));
-             }
+            if recording_now && !*was_rec {
+                let history: Vec<f32> = ring_buf.iter().cloned().collect();
+                let _ = tx.try_send(SensitiveAudio::new(history));
+            }
 
-             if recording_now {
-                 let _ = tx.try_send(SensitiveAudio::new(processed_chunk));
-             }
+            if recording_now {
+                match tx.try_send(SensitiveAudio::new(processed_chunk)) {
+                    Ok(_) => {} // SIlent success to avoid spam
+                    Err(e) => {
+                        // Only log error if channel is full/closed
+                        log::warn!("[WARN] Audio TX Full/Closed: {}", e);
+                    }
+                }
 
-             *was_rec = recording_now;
+                // Debug Counter to prove flow
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static SENT_COUNTER: AtomicUsize = AtomicUsize::new(0);
+                if SENT_COUNTER.fetch_add(1, Ordering::Relaxed) % 100 == 0 {
+                    log::debug!("[DEBUG] Audio TX: Sent chunk to Inference Engine");
+                }
+            }
+
+            *was_rec = recording_now;
         }
     }
 }

@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import Wizard from './components/Wizard.vue';
 import Dashboard from './components/Dashboard.vue';
 import Overlay from './components/Overlay.vue';
+import { checkForUpdates } from './updater';
 
 const isOnboarded = ref(false);
 const loading = ref(true);
@@ -15,12 +16,14 @@ onMounted(async () => {
     const win = await getCurrentWindow();
     windowLabel.value = win.label;
 
-    // Only check onboarding for main window
+    // Only check onboarding and updates for main window
     if (windowLabel.value === 'main') {
         try {
             isOnboarded.value = await invoke('get_onboarding_status');
+            // Check for updates
+            checkForUpdates();
         } catch (e) {
-            console.error("Onboarding check failed:", e);
+            console.error("Onboarding or update check failed:", e);
         }
     } else if (windowLabel.value === 'overlay') {
         console.log("Applying transparency classes for overlay");

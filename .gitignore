@@ -24,3 +24,5 @@ Thumbs.db
 
 pnpm-lock.yaml
 ui/pnpm-lock.yaml
+src-tauri/resources/ggml-base.en.bin
+

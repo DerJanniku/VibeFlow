@@ -7,7 +7,7 @@ import Settings from './Settings.vue';
 
 const status = ref('Ready');
 const showSettings = ref(false);
-const hotkeyLabel = ref('F9');
+const hotkeyLabel = ref('Ctrl+Shift+Space');
 const latestTranscript = ref('');
 const transcriptHistory = ref([]);
 let unlistenStatus;
@@ -15,8 +15,7 @@ let unlistenTranscript;
 
 onMounted(async () => {
     try {
-        const hotkey = await invoke('get_hotkey');
-        if (hotkey) hotkeyLabel.value = hotkey;
+    await updateHotkey();
     } catch (e) {
         console.error(e);
     }
@@ -51,11 +50,20 @@ const copyToClipboard = (text) => {
 const clearHistory = () => {
     transcriptHistory.value = [];
 };
+
+const updateHotkey = async () => {
+    try {
+        const hotkey = await invoke('get_hotkey');
+        if (hotkey) hotkeyLabel.value = hotkey;
+    } catch (e) {
+        console.error(e);
+    }
+};
 </script>
 
 <template>
   <div class="layout-container">
-    <Settings v-if="showSettings" @close="showSettings = false" />
+    <Settings v-if="showSettings" @close="showSettings = false; updateHotkey()" />
 
     <!-- Header -->
     <header class="header">
