@@ -134,7 +134,7 @@ class VibeFlowApp:
         while self.is_recording:
             time.sleep(3.0)
             if not self.is_recording: break
-            partial_path = self.audio.save_partial()
+            partial_path = self.audio.get_new_chunk()
             if partial_path and self.whisper:
                 # Wir schicken den bisherigen last_partial_text als Prompt mit
                 self.whisper.transcribe(

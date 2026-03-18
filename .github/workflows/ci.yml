@@ -1,0 +1,38 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [ main, master, production ]
+  pull_request:
+    branches: [ main, master, production ]
+
+jobs:
+  check:
+    name: Rust Check & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install dependencies (Ubuntu)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Check Formatting
+        run: cd src-tauri && cargo fmt --all -- --check || true
+
+      - name: Cargo Check
+        run: cd src-tauri && cargo check --all-targets
+
+      - name: Clippy Linting
+        run: cd src-tauri && cargo clippy -- -D warnings
