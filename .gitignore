@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Python
 __pycache__/
 *.py[cod]
@@ -12,3 +13,33 @@ legacy_tauri_version/
 
 # OS
 .DS_Store
+=======
+# Build artifacts
+/target
+node_modules
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tauri build
+/src-tauri/target
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+pnpm-lock.yaml
+ui/pnpm-lock.yaml
+src-tauri/resources/ggml-base.en.bin
+
+>>>>>>> origin/master
