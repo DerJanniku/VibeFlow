@@ -268,12 +268,16 @@ async fn main() {
                 );
 
                 loop {
+                    // Idle — waiting for the user to start recording
+                    set_tray_color(&app_handle_2, "green");
+
                     let (refined, command) = match engine
                         .start_processing_loop(&mut rx, &model_filename, &app_handle_2)
                         .await
                     {
                         transcript if !transcript.as_str().trim().is_empty() => {
                             let _ = app_handle_2.emit("status", "Processing");
+                            set_tray_color(&app_handle_2, "yellow");
                             match ContextEngine::refine_text(&transcript).await {
                                 Ok((r, c)) => (r, c),
                                 Err(_) => (transcript.as_str().to_string(), None),
@@ -291,6 +295,7 @@ async fn main() {
                         let _ = OSIntegration::paste_text(&refined);
                     }
                     let _ = app_handle_2.emit("status", "Ready");
+                    set_tray_color(&app_handle_2, "green");
                 }
             });
 
@@ -302,6 +307,8 @@ async fn main() {
                 std::thread::sleep(std::time::Duration::from_secs(1));
             });
 
+            let tray_icon_arc: Arc<Mutex<Option<tauri::tray::TrayIcon>>> = Arc::new(Mutex::new(None));
+
             let state = AppState {
                 is_recording,
                 tx_audio,
@@ -311,6 +318,7 @@ async fn main() {
                 hotkey_modifiers,
                 hotkey_code,
                 selected_model,
+                tray_icon: tray_icon_arc.clone(),
             };
             app.manage(state);
 
@@ -324,14 +332,8 @@ async fn main() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-            let tray_icon = app.default_window_icon().cloned()
-                .unwrap_or_else(|| {
-                    log::warn!("[WARNING] Default window icon not found, using empty icon.");
-                    tauri::image::Image::new(&[], 0, 0)
-                });
-
             let tray_builder = TrayIconBuilder::new()
-                .icon(tray_icon)
+                .icon(make_circle_icon(33, 150, 243))  // blue = starting
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
@@ -362,7 +364,11 @@ async fn main() {
             
             // On Linux, Tray creation can fail if libappindicator is missing or tray isn't available
             match tray_builder.build(app) {
-                Ok(_) => log::debug!("[DEBUG] System Tray initialized successfully."),
+                Ok(tray) => {
+                    log::debug!("[DEBUG] System Tray initialized successfully.");
+                    let _ = tray.set_tooltip(Some("VibeFlow — Starting"));
+                    *tray_icon_arc.lock() = Some(tray);
+                }
                 Err(e) => log::warn!("[WARNING] System Tray failed to initialize (expected on some Linux environments): {}", e),
             }
             
@@ -422,6 +428,41 @@ pub fn re_register_shortcut(app: &AppHandle) -> Result<(), tauri_plugin_global_s
     Ok(())
 }
 
+/// Generate a filled circle as raw RGBA pixel data — no extra crates needed.
+/// Colors match the Python prototype: blue=startup, green=ready, red=recording, yellow=processing.
+fn make_circle_icon(r: u8, g: u8, b: u8) -> tauri::image::Image<'static> {
+    const SIZE: usize = 22;
+    let center = SIZE as f32 / 2.0;
+    let radius = center - 1.5;
+    let mut data = vec![0u8; SIZE * SIZE * 4];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dx = x as f32 + 0.5 - center;
+            let dy = y as f32 + 0.5 - center;
+            let alpha = if (dx * dx + dy * dy).sqrt() <= radius { 255u8 } else { 0u8 };
+            let i = (y * SIZE + x) * 4;
+            data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = alpha;
+        }
+    }
+    tauri::image::Image::new_owned(data, SIZE as u32, SIZE as u32)
+}
+
+/// Update the system tray dot color + tooltip to reflect the current app state.
+/// Matches the Python prototype: blue=startup, green=ready, red=recording, yellow=processing.
+fn set_tray_color(app: &AppHandle, color: &str) {
+    let state = app.state::<AppState>();
+    let guard = state.tray_icon.lock();
+    let Some(tray) = &*guard else { return };
+    let (r, g, b, tip) = match color {
+        "red"    => (244u8,  67u8,  54u8, "VibeFlow — Recording"),
+        "yellow" => (255u8, 193u8,   7u8, "VibeFlow — Processing"),
+        "green"  => ( 38u8, 166u8, 154u8, "VibeFlow — Ready"),
+        _        => ( 33u8, 150u8, 243u8, "VibeFlow — Starting"),
+    };
+    let _ = tray.set_icon(Some(make_circle_icon(r, g, b)));
+    let _ = tray.set_tooltip(Some(tip));
+}
+
 fn play_feedback_sound(frequency: f32) {
     std::thread::spawn(move || {
         let res = OutputStream::try_default();
@@ -446,6 +487,7 @@ fn start_recording(app: &AppHandle) {
     *recording_guard = true;
 
     play_feedback_sound(880.0);
+    set_tray_color(app, "red");
     log::info!(">>> VibeFlow: Recording Toggle ON (Flag set to true)");
 
     // NEW LOGIC: We don't spawn a thread here anymore.
@@ -550,5 +592,6 @@ fn stop_recording(app: &AppHandle) {
     }
 
     play_feedback_sound(440.0);
+    set_tray_color(app, "yellow");
     log::info!(">>> VibeFlow: Recording Toggle OFF (Flag set to false)");
 }
