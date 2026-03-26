@@ -115,10 +115,10 @@ impl OSIntegration {
 
         #[cfg(target_os = "linux")]
         {
-            return LinuxPaste::paste_text(text).map_err(|e| {
+            LinuxPaste::paste_text(text).map_err(|e| {
                 log::warn!("[Linux] Paste failed: {}", e);
                 e
-            });
+            })
         }
 
         #[cfg(target_os = "windows")]
@@ -141,10 +141,10 @@ impl OSIntegration {
                 let _ = clipboard.set_text(original_content);
                 Ok::<(), anyhow::Error>(())
             });
-            return match result {
+            match result {
                 Ok(inner) => inner,
                 Err(_) => Err(anyhow::anyhow!("Paste operation panicked")),
-            };
+            }
         }
 
         #[cfg(target_os = "macos")]
@@ -164,7 +164,7 @@ impl OSIntegration {
                 Command::SelectAll => "ctrl+a",
                 Command::Enter     => "Return",
             };
-            return LinuxPaste::execute_command(key_sequence);
+            LinuxPaste::execute_command(key_sequence)
         }
 
         #[cfg(target_os = "windows")]

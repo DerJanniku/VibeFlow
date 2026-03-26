@@ -113,7 +113,7 @@ impl ContextEngine {
     }
 
     pub async fn refine_text(transcript: &SensitiveTranscript) -> Result<(String, Option<Command>)> {
-        if let Err(_) = Self::validate_endpoint() {
+        if Self::validate_endpoint().is_err() {
             return Ok((transcript.as_str().to_string(), None));
         }
 

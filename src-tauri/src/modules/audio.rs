@@ -304,6 +304,7 @@ impl AudioEngine {
         Ok(names)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn process_audio_chunk(
         data: &[f32],
         tx: &mpsc::Sender<SensitiveAudio>,
