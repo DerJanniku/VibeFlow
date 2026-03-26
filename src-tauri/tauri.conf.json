@@ -60,9 +60,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources/ggml-base.en.bin"
-    ],
     "targets": "all"
   },
   "plugins": {

@@ -46,7 +46,7 @@ impl InferenceEngine {
         }
 
         let ctx = match WhisperContext::new_with_params(
-            &model_path.to_string_lossy(),
+            &model_path,
             WhisperContextParameters::default(),
         ) {
             Ok(c) => c,
@@ -188,14 +188,18 @@ impl InferenceEngine {
         }
 
         let mut result = String::new();
-        let num_segments = state.full_n_segments().unwrap_or(0);
+        let num_segments = state.full_n_segments();
         let mut full_raw = String::new();
 
         // Deduplication Logic
         let mut last_segment = String::new();
 
         for i in 0..num_segments {
-            if let Ok(segment) = state.full_get_segment_text(i) {
+            if let Some(seg_obj) = state.get_segment(i) {
+                let segment = match seg_obj.to_str_lossy() {
+                    Ok(s) => s.into_owned(),
+                    Err(_) => continue,
+                };
                 full_raw.push_str(&segment);
                 let clean_seg = segment.trim();
 

@@ -14,6 +14,7 @@ use modules::{
     audio::AudioEngine, inference::InferenceEngine, llm::ContextEngine,
     os_integration::OSIntegration, state::AppState,
 };
+// active_win_pos_rs is excluded on Linux (crashes on Wayland) — see Cargo.toml target dep
 use parking_lot::Mutex;
 use rodio::{OutputStream, Sink, Source};
 use std::sync::Arc;
@@ -58,11 +59,37 @@ async fn main() {
     // Switch to Multilingual Model for German Support
     let selected_model = Arc::new(Mutex::new("ggml-base.bin".to_string()));
 
-    // Create a temporary app handle to get the app_data_dir without starting the app
-    // Actually, we can just use std::fs since we know where it should be on Windows
+    // Resolve the app config directory in a cross-platform way before Tauri initialises.
+    // Windows: %APPDATA%\com.derjanniku.vibeflow
+    // Linux:   $XDG_CONFIG_HOME/com.derjanniku.vibeflow  (fallback: ~/.config/…)
+    // macOS:   ~/Library/Application Support/com.derjanniku.vibeflow
+    #[cfg(target_os = "windows")]
     let app_data = std::env::var("APPDATA")
         .ok()
         .map(|ad| std::path::PathBuf::from(ad).join("com.derjanniku.vibeflow"))
+        .unwrap_or_default();
+
+    #[cfg(target_os = "linux")]
+    let app_data = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".config"))
+                .unwrap_or_default()
+        })
+        .join("com.derjanniku.vibeflow");
+
+    #[cfg(target_os = "macos")]
+    let app_data = std::env::var("HOME")
+        .ok()
+        .map(|h| {
+            std::path::PathBuf::from(h)
+                .join("Library")
+                .join("Application Support")
+                .join("com.derjanniku.vibeflow")
+        })
         .unwrap_or_default();
 
     let config_path = app_data.join("config.json");
@@ -72,11 +99,11 @@ async fn main() {
                 // FORCE RESET CHECK
                 let version_match = json.get("version")
                     .and_then(|v| v.as_str())
-                    .map(|v| v == "0.3.3")
+                    .map(|v| v == "0.3.4")
                     .unwrap_or(false);
 
                 if !version_match {
-                    log::warn!("[WARNING] Config version mismatch (or missing). Forcing factory reset for Patch 6.");
+                    log::warn!("[WARNING] Config version mismatch (or missing). Forcing factory reset.");
                     // We only delete config.json to force onboarding. We KEEP the model if it exists/valid (handled later).
                     // Actually, safe bet is to let logic proceed but IGNORE the loaded config.
                     // Or better: Delete the file so 'setup' runs.
@@ -144,7 +171,6 @@ async fn main() {
             modules::commands::get_hotkey,
             modules::commands::download_model,
             modules::commands::get_selected_model,
-            modules::commands::get_onboarding_status,
             modules::commands::get_onboarding_status,
             modules::commands::complete_onboarding,
             ui_ready
@@ -357,12 +383,13 @@ async fn main() {
             // Handle window close -> hide to tray ONLY if on Windows/Mac or if tray is actually there
             // For Linux, we default to showing the window initially but allowing standard close if tray fails.
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(not(target_os = "linux"))]
                 let win = window.clone();
                 window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if let tauri::WindowEvent::CloseRequested { api: _close_api, .. } = event {
                         #[cfg(not(target_os = "linux"))]
                         {
-                            api.prevent_close();
+                            _close_api.prevent_close();
                             let _ = win.hide();
                         }
                         // On Linux, we allow standard close unless we want to force hide?
@@ -442,10 +469,9 @@ fn start_recording(app: &AppHandle) {
 
     // Position overlay logic remains the same
     // Get active window to determine which monitor the user is looking at
-    // CRASH FIX: active_win_pos_rs causes Segfaults on Wayland. Disable it on Linux.
-    let target_monitor = if cfg!(target_os = "linux") {
-        None 
-    } else if let Ok(active_window) = active_win_pos_rs::get_active_window() {
+    // active_win_pos_rs is not compiled on Linux (Wayland segfault) — see Cargo.toml
+    #[cfg(not(target_os = "linux"))]
+    let target_monitor = if let Ok(active_window) = active_win_pos_rs::get_active_window() {
         let active_center_x =
             active_window.position.x + (active_window.position.width / 2.0) as f64;
         let active_center_y =
@@ -471,6 +497,9 @@ fn start_recording(app: &AppHandle) {
         None
     };
 
+    #[cfg(target_os = "linux")]
+    let target_monitor: Option<tauri::Monitor> = None;
+
     // Fallback to main window or overlay's current
     let final_monitor = target_monitor
         .or_else(|| {
@@ -488,40 +517,30 @@ fn start_recording(app: &AppHandle) {
                 "[DEBUG] Positioning overlay on monitor: {:?}",
                 monitor.name()
             );
-            #[cfg(not(target_os = "linux"))]
-            {
-                let size = monitor.size();
-                let win_size = overlay
-                    .outer_size()
-                    .unwrap_or(tauri::PhysicalSize::new(120, 120));
-                let x = monitor.position().x + (size.width as i32 - win_size.width as i32) / 2;
-                let y = monitor.position().y + size.height as i32 - win_size.height as i32 - 10;
-                let _ = overlay.set_position(tauri::PhysicalPosition::new(x, y));
-            }
-            #[cfg(target_os = "linux")]
-            {
-                println!("[DEBUG] Linux/Wayland: Skipping set_position to prevent tao panic. Using compositor default.");
+            let size = monitor.size();
+            let win_size = overlay
+                .outer_size()
+                .unwrap_or(tauri::PhysicalSize::new(200, 120));
+            let x = monitor.position().x + (size.width as i32 - win_size.width as i32) / 2;
+            let y = monitor.position().y + size.height as i32 - win_size.height as i32 - 40;
+            // On Wayland, set_position is restricted by the compositor; log failure but don't crash.
+            if let Err(e) = overlay.set_position(tauri::PhysicalPosition::new(x, y)) {
+                log::debug!("[DEBUG] set_position not supported by compositor (Wayland): {}. Using default position.", e);
             }
         } else {
             log::error!("[ERROR] Could not detect any monitor for overlay positioning.");
         }
 
-        // Show the window as early as possible on Linux to ensure it's mapped by the compositor
+        // Show the window as early as possible to ensure it's mapped by the compositor
         let _ = overlay.show();
 
+        // set_shadow is only meaningful on Windows/macOS
         #[cfg(not(target_os = "linux"))]
-        {
-            // Force transparency and positioning for Windows/Mac
-            let _ = overlay.set_shadow(false);
-            let _ = overlay.set_ignore_cursor_events(true);
-            // let _ = overlay.set_focus(); // REMOVED: Steals focus from text fields
-        }
+        let _ = overlay.set_shadow(false);
 
-        #[cfg(target_os = "linux")]
-        {
-            log::debug!("[DEBUG] Linux/Wayland: Showing overlay. Skipping set_position/shadow to prevent tao panic.");
-            // On some Wayland compositors, focus is needed for visibility
-            // let _ = overlay.set_focus(); // REMOVED
+        // Prevent the overlay from stealing input focus or blocking clicks
+        if let Err(e) = overlay.set_ignore_cursor_events(true) {
+            log::debug!("[DEBUG] set_ignore_cursor_events failed (may not be supported): {}", e);
         }
     }
 
