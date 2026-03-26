@@ -80,8 +80,7 @@ impl AudioEngine {
                 config.sample_rate().0,
                 config.sample_format()
             );
-            log::error!("{}", msg);
-            println!("{}", msg);
+            log::info!("{}", msg);
 
             let source_sample_rate = config.sample_rate().0 as f32;
             let source_channels = config.channels() as usize;

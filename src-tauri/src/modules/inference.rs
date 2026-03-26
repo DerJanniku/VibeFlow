@@ -37,12 +37,31 @@ impl InferenceEngine {
     ) -> SensitiveTranscript {
         let model_path = self.base_path.join(model_filename);
 
+        let mut samples_buffer = Vec::new();
+        let mut full_transcript = String::new();
+        let chunk_limit = 16000 * 30; // Hard limit 30s to prevent RAM explosion
+        let mut last_inference_time = Instant::now();
+        let inference_interval = Duration::from_millis(100);
+
+        // ── Wait for audio data first ──────────────────────────────────────────
+        // Block here (idle) until the user actually starts recording.
+        // This avoids spinning on the model-not-found check while idle.
+        loop {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Some(chunk)) => {
+                    samples_buffer.extend_from_slice(chunk.as_slice());
+                    break; // got first chunk — now load the model and proceed
+                }
+                Ok(None) => return SensitiveTranscript::new(String::new()), // channel closed
+                Err(_) => continue, // timeout = still idle, keep waiting
+            }
+        }
+
+        // ── Model load (only reached when a recording session actually starts) ─
         if !model_path.exists() {
             log::error!("[ERROR] Whisper model not found at {:?}", model_path);
-            return SensitiveTranscript::new(format!(
-                "Error: AI model not found. Please download {} in settings.",
-                model_filename
-            ));
+            let _ = app_handle.emit("status", format!("Model not found — download {} in Settings", model_filename));
+            return SensitiveTranscript::new(String::new());
         }
 
         let ctx = match WhisperContext::new_with_params(
@@ -52,10 +71,8 @@ impl InferenceEngine {
             Ok(c) => c,
             Err(e) => {
                 log::error!("[ERROR] Failed to load Whisper model: {}", e);
-                return SensitiveTranscript::new(format!(
-                    "Error: Failed to load AI model ({}). It might be corrupted.",
-                    e
-                ));
+                let _ = app_handle.emit("status", format!("Model load error: {}", e));
+                return SensitiveTranscript::new(String::new());
             }
         };
 
@@ -63,27 +80,14 @@ impl InferenceEngine {
             Ok(s) => s,
             Err(e) => {
                 log::error!("[ERROR] Failed to create Whisper state: {}", e);
-                return SensitiveTranscript::new(format!(
-                    "Error: Failed to initialize AI state ({}).",
-                    e
-                ));
+                return SensitiveTranscript::new(String::new());
             }
         };
 
-        log::debug!(
-            "[DEBUG] Inference Loop Started for model: {}",
-            model_filename
-        );
+        log::debug!("[DEBUG] Model loaded, processing recording session for: {}", model_filename);
 
-        let mut samples_buffer = Vec::new();
-        let mut full_transcript = String::new();
-        let chunk_limit = 16000 * 30; // Hard limit 30s to prevent RAM explosion
-        let mut last_inference_time = Instant::now();
-        let inference_interval = Duration::from_millis(100); // 100ms for INSTANT feedback (User requested "fast as fuck")
-
+        // ── Drain remaining audio chunks from this recording session ──────────
         loop {
-            // We use a short timeout to check for "Silence" (Conversation End)
-            // But we also want to process *while* receiving if enough time passed.
             match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
                 Ok(Some(chunk)) => {
                     samples_buffer.extend_from_slice(chunk.as_slice());

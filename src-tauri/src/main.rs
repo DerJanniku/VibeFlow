@@ -48,8 +48,8 @@ async fn main() {
         log::error!("[CRITICAL PANIC] {} at {}", msg, location);
     }));
 
-    // START RECORDING BY DEFAULT (Always-On)
-    let is_recording = Arc::new(Mutex::new(true));
+    // Start idle — recording begins only when the user presses the hotkey
+    let is_recording = Arc::new(Mutex::new(false));
     let tx_audio = Arc::new(Mutex::new(None));
     let amplitude = Arc::new(Mutex::new(0.0));
     let selected_device = Arc::new(Mutex::new(None));
@@ -301,7 +301,7 @@ async fn main() {
 
                     if let Some(cmd) = command {
                         let _ = OSIntegration::execute_command(cmd);
-                    } else {
+                    } else if !refined.is_empty() && !refined.starts_with("Error:") {
                         let _ = OSIntegration::paste_text(&refined);
                     }
                     let _ = app_handle_2.emit("status", "Ready");
