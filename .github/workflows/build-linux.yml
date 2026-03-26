@@ -64,14 +64,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload .deb package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vibeflow-linux-deb
           path: src-tauri/target/release/bundle/deb/*.deb
           retention-days: 30
 
       - name: Upload AppImage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vibeflow-linux-appimage
           path: src-tauri/target/release/bundle/appimage/*.AppImage

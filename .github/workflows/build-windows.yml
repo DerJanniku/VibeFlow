@@ -47,7 +47,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload Windows Installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vibeflow-windows-installer
           path: |
@@ -56,7 +56,7 @@ jobs:
           retention-days: 30
 
       - name: Upload Portable EXE
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vibeflow-windows-portable
           path: src-tauri/target/release/*.exe
