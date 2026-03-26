@@ -44,7 +44,7 @@ echo "▸ Checking source correctness..."
 cd "$ROOT"
 
 check "is_recording starts false"         grep -q "Mutex::new(false)" src-tauri/src/main.rs
-check "config version is 0.3.4"           grep -q '"0.3.4"' src-tauri/src/main.rs
+check "no config version wipe"            bash -c '! grep -q "Forcing factory reset" src-tauri/src/main.rs'
 check "no duplicate invoke handler"       bash -c '[ $(grep -c "get_onboarding_status" src-tauri/src/main.rs) -eq 1 ]'
 check "tauri-plugin-updater in Cargo"     grep -q "tauri-plugin-updater" src-tauri/Cargo.toml
 check "tauri-plugin-process in Cargo"     grep -q "tauri-plugin-process" src-tauri/Cargo.toml
@@ -55,7 +55,7 @@ check "inference waits for audio first"   grep -q "Wait for audio data first" sr
 check "Hyprland detection in paste"       grep -q "HYPRLAND_INSTANCE_SIGNATURE" src-tauri/src/modules/linux_paste.rs
 check "wl-copy used on Wayland"           grep -q "wl-copy" src-tauri/src/modules/linux_paste.rs
 check "hyprctl used for window detect"    grep -q "hyprctl" src-tauri/src/modules/os_integration.rs
-check "Linux config path uses HOME"       grep -q 'XDG_CONFIG_HOME' src-tauri/src/main.rs
+check "Linux config path uses XDG_DATA_HOME" grep -q 'XDG_DATA_HOME' src-tauri/src/main.rs
 check "Linux CI has webkit2gtk-4.1"       grep -q "webkit2gtk-4.1" .github/workflows/ci.yml
 check "Linux build workflow exists"       test -f .github/workflows/build-linux.yml
 

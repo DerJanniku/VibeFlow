@@ -69,14 +69,16 @@ async fn main() {
         .map(|ad| std::path::PathBuf::from(ad).join("com.derjanniku.vibeflow"))
         .unwrap_or_default();
 
+    // Tauri's app_data_dir on Linux = $XDG_DATA_HOME/… (default ~/.local/share/…)
+    // Must match exactly so config.json and model files are in the same place.
     #[cfg(target_os = "linux")]
-    let app_data = std::env::var("XDG_CONFIG_HOME")
+    let app_data = std::env::var("XDG_DATA_HOME")
         .ok()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             std::env::var("HOME")
                 .ok()
-                .map(|h| std::path::PathBuf::from(h).join(".config"))
+                .map(|h| std::path::PathBuf::from(h).join(".local").join("share"))
                 .unwrap_or_default()
         })
         .join("com.derjanniku.vibeflow");
@@ -96,29 +98,14 @@ async fn main() {
     if config_path.exists() {
         if let Ok(data) = std::fs::read_to_string(&config_path) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                // FORCE RESET CHECK
-                let version_match = json.get("version")
-                    .and_then(|v| v.as_str())
-                    .map(|v| v == "0.3.4")
-                    .unwrap_or(false);
-
-                if !version_match {
-                    log::warn!("[WARNING] Config version mismatch (or missing). Forcing factory reset.");
-                    // We only delete config.json to force onboarding. We KEEP the model if it exists/valid (handled later).
-                    // Actually, safe bet is to let logic proceed but IGNORE the loaded config.
-                    // Or better: Delete the file so 'setup' runs.
-                    drop(json); // release borrow
-                    let _ = std::fs::remove_file(&config_path);
-                    log::info!("[INFO] Config wiped. Onboarding will trigger.");
-                } else {
-                    // Only load if version matches
-                    if let Some(m) = json.get("model").and_then(|v| v.as_str()) {
-                        *selected_model.lock() = m.to_string();
-                    }
+                // Load all fields that are present — no version-based wipe.
+                // Missing fields just keep their defaults.
+                if let Some(m) = json.get("model").and_then(|v| v.as_str()) {
+                    *selected_model.lock() = m.to_string();
+                }
                 if let Some(d) = json.get("device").and_then(|v| v.as_str()) {
                     *selected_device.lock() = Some(d.to_string());
                 }
-                // Handle hotkey loading if present in config
                 if let Some(hk) = json.get("hotkey") {
                     if let Some(mods_arr) = hk.get("modifiers").and_then(|v| v.as_array()) {
                         let mut m = Modifiers::empty();
@@ -136,13 +123,12 @@ async fn main() {
                         *hotkey_modifiers.lock() = m;
                     }
                     if let Some(code_str) = hk.get("code").and_then(|v| v.as_str()) {
-                        // Simple mapping for Space
                         if code_str.to_uppercase() == "SPACE" {
                             *hotkey_code.lock() = Code::Space;
                         }
                     }
                 }
-            }
+                log::info!("[INFO] Config loaded from {:?}", config_path);
             }
         }
     }
