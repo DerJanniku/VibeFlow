@@ -74,13 +74,33 @@ check "audio device connected"            grep -q "Auto-Healing connected\|AUDIO
 check "no idle model-not-found spam"      bash -c '[ $(grep -c "Whisper model not found" '"$LOG"') -le 2 ]'
 check "no error strings pasted"           bash -c '! grep -q "paste_text: Error:" '"$LOG"
 
-# ── 5. Cleanup ─────────────────────────────────────────────────────────────────
+# ── 5. Whisper transcription accuracy test ────────────────────────────────────
+echo ""
+echo "▸ Testing Whisper transcription..."
+MODEL="$HOME/.local/share/com.derjanniku.vibeflow/ggml-base.en.bin"
+TEST_BIN="/tmp/whisper_test_project/target/release/whisper_test"
+
+if [ ! -f "$MODEL" ]; then
+    echo "  (skipping — model not downloaded yet)"
+elif [ ! -f "$TEST_BIN" ]; then
+    echo "  (skipping — test binary not built, run: cd /tmp/whisper_test_project && cargo build --release)"
+else
+    flite -t "hello this is a test" -o /tmp/vf_test_speech.wav 2>/dev/null
+    ffmpeg -y -i /tmp/vf_test_speech.wav -ar 16000 -ac 1 /tmp/vf_test_16k.wav 2>/dev/null
+    TRANSCRIPT=$("$TEST_BIN" "$MODEL" /tmp/vf_test_16k.wav 2>/dev/null | grep "^TRANSCRIPT:" | sed 's/TRANSCRIPT: //')
+    echo "  Input:      'hello this is a test'"
+    echo "  Transcript: '$TRANSCRIPT'"
+    check "model loads and transcribes" test -n "$TRANSCRIPT"
+    check "transcript roughly correct"  bash -c 'echo "'"$TRANSCRIPT"'" | grep -qi "hello\|test"'
+fi
+
+# ── 7. Cleanup ─────────────────────────────────────────────────────────────────
 kill $APP_PID 2>/dev/null || true
 wait $APP_PID 2>/dev/null || true
 pkill -f "vibeflow|vite" 2>/dev/null || true
 fuser -k 5173/tcp 2>/dev/null || true
 
-# ── 6. Summary ─────────────────────────────────────────────────────────────────
+# ── 8. Summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 TOTAL=$((PASS+FAIL))
